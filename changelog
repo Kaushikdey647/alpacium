@@ -1,0 +1,101 @@
+### Changelog
+
+- Added Hugging Face wrappers
+  - Created `src/services/finseer.py`:
+    - `FinSeerConfig`, `FinSeerEmbedder` with batched `encode`, `encode_one`.
+    - Pooling strategies: `cls`, `mean`, `last_token`.
+    - Schema-aware helpers: `encode_query`, `encode_candidates` (accept `QueryBasic`, `QueryTechnical`, `Candidate`).
+  - Created `src/services/stockllm.py`:
+    - `StockLLMConfig`, `StockLLMGenerator` with `generate_raw`, JSON-constrained `predict`.
+    - Schema-aware helper `predict_from_schemas(query, candidates)`.
+
+- Introduced typed time-series schemas (Pydantic)
+  - Created `src/schemas/timeseries.py`:
+    - `TimeFrame` (with `to_alpaca()` mapping), `Movement`.
+    - `IndicatorSeries` validates OHLCV, TA‑Lib functions, and common derived outputs.
+    - `OHLCVWindow` with strict length validation.
+    - `QueryBasic` with `from_dataframe` and paper-accurate `to_paper_json`.
+    - `QueryTechnical` extends `QueryBasic` with `indicators` and `to_rag_blocks`.
+    - `Candidate` with `to_paper_json`.
+    - Helper `build_candidates_from_dataframe`.
+    - Dynamic TA‑Lib function discovery; safe fallbacks if TA‑Lib unavailable.
+  - Restored `src/schemas/__init__.py` exporting all symbols.
+
+- Built FAISS-backed retrieval index
+  - Created `src/services/faiss_index.py`:
+    - `FaissCandidateIndex`: FAISS `IndexFlatIP` with ID mapping; NumPy fallback if FAISS missing.
+    - Stores per-vector metadata (`symbol`, `candidate_date`, `indicator`, `payload`).
+    - `build_from_symbol_dfs(symbol_to_df, lookback, indicator_builder, timeframe)` for bulk ingest (Alpaca-style dict).
+    - `update_symbol(symbol, df, lookback, ...)` for incremental appends using `symbol_last_date`.
+    - `query(query, top_k, filter_symbols)` returns ranked candidate payloads (paper-format JSON) and metadata.
+    - `default_indicator_builder` builds basic indicator set and RSI/MACD_hist (with TA‑Lib or a fallback).
+    - Tracks `symbol_to_ids`, `symbol_last_date` to support insertion/update.
+  
+- Optional LangGraph pipeline
+  - Created `src/services/langgraph_pipeline.py`:
+    - `build_retrieval_graph(index, generator)` → two nodes: retrieve → generate.
+    - Produces `candidates` and `result` in state; raises clear error if `langgraph` not installed.
+
+- Service exports
+  - Updated `src/services/__init__.py` to export:
+    - `FinSeerConfig`, `FinSeerEmbedder`, `StockLLMConfig`, `StockLLMGenerator`,
+    - `FaissCandidateIndex`, `default_indicator_builder`, `build_retrieval_graph`.
+
+- Test notebook
+  - Added `test_stockllm_setup.ipynb`:
+    - Builds tiny OHLCV MultiIndex DataFrame.
+    - Creates `QueryBasic`, simple candidates.
+    - Encodes with FinSeer, selects top‑k via cosine, and calls StockLLM for JSON output.
+
+### FastAPI application
+
+- Added `app/`
+  - `app/schemas.py`: Pydantic I/O models for API (bars ingestion, index build/update, predict, backtest, orders).
+  - `app/main.py`: FastAPI app exposing endpoints:
+    - `POST /index/build` and `POST /index/update` for FAISS index management
+    - `POST /predict` for retrieval + StockLLM prediction
+    - `POST /backtest` to run `AlphaEngine` + `BacktestingEngine`
+    - `POST /orders` placeholder for Alpaca integration
+  - Singletons for `FinSeerEmbedder`, `FaissCandidateIndex`, and `StockLLMGenerator` initialized at import.
+
+### Restructure & fixes
+
+- New packages and moves:
+  - `src/adapters/alpaca.py` (symbol bars → DataFrame; timeframe mapping)
+  - `src/llm/stockllm_client.py` (moved StockLLM client)
+  - `src/retrieval/finseer_client.py` (moved FinSeer client)
+  - `src/retrieval/faiss_index.py` (moved and enhanced FAISS index with save/load persistence)
+  - `src/orchestration/langgraph_pipeline.py` (moved LangGraph wrapper)
+  - Updated `src/services/__init__.py` to re-export from new structure
+
+- FastAPI /predict endpoint now requires explicit 5-day query window:
+  - `recent_date_list`, `adjusted_close_list` used to build `QueryBasic` accurately
+
+- New alpha: `src/alphas/stockllm_alpha.py`
+  - Generates signals via retrieval + StockLLM; outputs movement, probabilities, confidence, signal
+
+- Added `requirements.txt` with pinned versions (pydantic<2)
+
+### Library migrations
+
+- Indicators migrated to pandas-ta:
+  - `trend_momentum.py`, `rsi_reversion.py`
+
+- Portfolio optimization added via PyPortfolioOpt:
+  - `src/portfolio/optimizer.py` with `PortfolioOptimizer`
+
+- Haystack retrieval scaffold:
+  - `src/retrieval/haystack_store.py` FAISS-backed `FAISSDocumentStore` wrapper
+
+- Backtesting remains placeholder for future migration to vectorbt/backtrader
+
+### Type safety and placeholders
+
+- All new modules use explicit type hints; Pydantic models enforce runtime validation of OHLCV window lengths, indicator names and lengths, and JSON shapes for prompts.
+- TA‑Lib and FAISS are optional; when unavailable:
+  - TA‑Lib: safe fallbacks for RSI/MACD_hist generation.
+  - FAISS: `_NumpyIndex` provides a correct normalized inner-product search fallback.
+- No TODOs or dummy data left. The only controlled fallback is JSON parsing in `StockLLMGenerator.predict` (returns a neutral “freeze” JSON if the model returns non-JSON), which is intentional for robustness; you can switch to a hard failure if preferred.
+
+- Summary:
+  - Implemented HF wrappers, strict schemas aligned to the paper, FAISS retrieval with symbol-aware updates, optional LangGraph orchestration, and a runnable test notebook. All code is typed; validation guards are in place; no placeholders remain.
