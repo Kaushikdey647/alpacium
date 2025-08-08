@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict
 
 try:
     from alpaca.trading import TradingClient  # type: ignore
@@ -53,5 +53,22 @@ class AlpacaTrading:
         )
         resp = self.client.submit_order(order_data=req)
         return str(resp.id)
+
+    def get_positions(self) -> Dict[str, float]:
+        pos = self.client.get_all_positions()
+        out: Dict[str, float] = {}
+        for p in pos:
+            try:
+                out[str(p.symbol)] = float(p.qty)
+            except Exception:
+                out[str(p.symbol)] = float(getattr(p, "qty", 0))
+        return out
+
+    def get_account_equity(self) -> float:
+        acc = self.client.get_account()
+        try:
+            return float(acc.equity)
+        except Exception:
+            return float(getattr(acc, "equity", 0.0))
 
 

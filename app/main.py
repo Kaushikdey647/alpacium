@@ -19,7 +19,34 @@ from src.retrieval.finseer_client import FinSeerEmbedder, FinSeerConfig
 from src.llm.stockllm_client import StockLLMGenerator, StockLLMConfig
 
 
-app = FastAPI(title="Alpacium Trading API", version="0.1.0")
+openapi_tags = [
+    {"name": "index", "description": "Build and update FinSeer/FAISS candidate index"},
+    {"name": "predict", "description": "LLM-based movement prediction via FinSeer retrieval"},
+    {"name": "portfolio", "description": "Portfolio optimization and rebalancing"},
+    {"name": "portfolios", "description": "Portfolio CRUD (Supabase)"},
+    {"name": "embeddings", "description": "Embeddings metadata CRUD (Supabase)"},
+    {"name": "bars", "description": "Normalized OHLCV bars upsert and query"},
+]
+
+app = FastAPI(
+    title="Alpacium Trading API",
+    version="0.1.0",
+    description=(
+        "REST API for RAG-driven alpha generation (FinSeer + StockLLM), retrieval index management, "
+        "portfolio optimization (PyPortfolioOpt), order management with Alpaca, and metadata storage in Supabase.\n\n"
+        "- Docs: /docs (Swagger UI), /redoc (ReDoc)\n"
+        "- OpenAPI: /openapi.json"
+    ),
+    contact={
+        "name": "Alpacium",
+        "url": "https://github.com/",
+    },
+    license_info={
+        "name": "MIT License",
+        "url": "https://opensource.org/licenses/MIT",
+    },
+    openapi_tags=openapi_tags,
+)
 
 
 # --- Singletons (simple in-memory for now) -------------------------------------
@@ -86,6 +113,8 @@ from app.routes.embeddings import router as embeddings_router
 app.include_router(embeddings_router)
 from app.routes.bars import router as bars_router
 app.include_router(bars_router)
+from app.routes.alphas_registry import router as alphas_router
+app.include_router(alphas_router)
 
 
 @app.post("/orders", response_model=PlaceOrderResponse)

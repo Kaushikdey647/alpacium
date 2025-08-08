@@ -89,6 +89,57 @@
 
 - Backtesting remains placeholder for future migration to vectorbt/backtrader
 
+### API docs & Swagger UI
+
+- Enhanced FastAPI app metadata and tags for grouped docs
+- Swagger UI at `/docs`, ReDoc at `/redoc`, OpenAPI at `/openapi.json`
+- Documented routers for indexing, predict, portfolio, portfolios CRUD, embeddings, and bars
+
+### Routing & organization
+
+- Split monolithic `app/main.py` routes into modular routers:
+  - `app/routes/indexing.py`, `app/routes/predict.py`, `app/routes/portfolio.py`,
+    `app/routes/portfolios_crud.py`, `app/routes/embeddings.py`, `app/routes/bars.py`, `app/routes/alphas_registry.py`
+- Added `app/deps.py` centralizing singletons (embedder, index, generator, Supabase)
+
+### Backtesting engine migration
+
+- Introduced vectorbt-based engine `src/engines/vbt_engine.py` and switched `/backtest` to use it
+- Removed legacy `src/engines/backtesting_engine.py`
+
+### Supabase integration
+
+- Added `src/adapters/supabase_client.py` with generic CRUD helpers
+- Portfolio CRUD endpoints (`/portfolios`): create/list/delete
+- Embeddings metadata CRUD (`/embeddings`): upsert/list/delete
+- Bars upsert/list (`/bars`) for normalized OHLCV caching
+
+### Alpha registry
+
+- Added `src/alphas/registry.py` (in-memory resolver) and Supabase-backed registry helpers
+- Added `/alphas` endpoints to upsert/list/delete registry entries (name, import_path, version, default_params)
+
+### Portfolio engine enhancements
+
+- Extended `src/portfolio/optimizer.py` to support objectives (max_sharpe, min_vol, target_return, target_vol),
+  risk models (sample, ledoit_wolf, exp_ewm), per-asset bounds, and L2 regularization
+- Added `src/portfolio/sizing.py` (fixed_fractional, fixed_dollar, vol_target) and `src/portfolio/oms.py`
+  (target shares, diff to orders, simple risk checks)
+- Added API endpoints `/portfolio/optimize` and `/portfolio/rebalance`
+
+### Trading enhancements
+
+- Orders API now accepts `paper` flag to switch paper/live trading for Alpaca
+- `src/adapters/alpaca_trading.py` now exposes `get_positions()` and `get_account_equity()`
+
+### Retrieval store
+
+- Added `src/retrieval/haystack_store.py` (FAISS-backed Haystack document store wrapper) for future migration
+
+### Notebooks
+
+- Added `test_stockllm_setup.ipynb` and `backtest_stockllm_alpha.ipynb` (demo of RAG alpha and backtest)
+
 ### Type safety and placeholders
 
 - All new modules use explicit type hints; Pydantic models enforce runtime validation of OHLCV window lengths, indicator names and lengths, and JSON shapes for prompts.

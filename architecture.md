@@ -45,11 +45,14 @@
     - Request/response models: `BuildIndexRequest/Response`, `UpdateIndexRequest/Response`,
       `QueryPredictRequest`/`PredictResponse`, `BacktestRequest/Response`, `PlaceOrderRequest/Response`
   - `main.py`:
-    - Endpoints:
-      - `POST /index/build`, `POST /index/update` → FAISS index operations
-      - `POST /predict` → retrieval + StockLLM prediction over top-k candidates
-      - `POST /backtest` → generate alpha signals and run backtest
-      - `POST /orders` → placeholder for Alpaca order submission
+    - Routers:
+      - `app/routes/indexing.py`: `/index/build`, `/index/update`
+      - `app/routes/predict.py`: `/predict`
+      - `app/routes/portfolio.py`: `/portfolio/optimize`, `/portfolio/rebalance`
+      - `app/routes/portfolios_crud.py`: `/portfolios` CRUD
+      - `app/routes/embeddings.py`: `/embeddings` CRUD
+      - `app/routes/bars.py`: `/bars` upsert and list
+    - Docs: Swagger UI at `/docs`, ReDoc at `/redoc`, OpenAPI at `/openapi.json`
     - In-memory singletons for FinSeer embedder, FAISS index, and StockLLM generator
 
 ### Data flow (typical)

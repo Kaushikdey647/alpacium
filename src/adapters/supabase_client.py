@@ -50,6 +50,22 @@ class SupabaseDB:
         rows = getattr(res, "data", None) or []
         return rows[0] if rows else data
 
+    # --- Alpha registry ----------------------------------------------------
+    def upsert_alpha(self, name: str, import_path: str, version: str, default_params: Dict[str, Any]) -> Dict[str, Any]:
+        row = {
+            "name": name,
+            "import_path": import_path,
+            "version": version,
+            "default_params": default_params,
+        }
+        return self.upsert("alpha_registry", row)
+
+    def list_alphas(self) -> List[Dict[str, Any]]:
+        return self.select("alpha_registry", limit=1000)
+
+    def delete_alpha(self, name: str) -> bool:
+        return self.delete("alpha_registry", {"name": name})
+
     def get_portfolio(self, portfolio_id: str) -> Optional[Dict[str, Any]]:
         res = self.client.table("portfolios").select("*").eq("id", portfolio_id).single().execute()
         return getattr(res, "data", None)

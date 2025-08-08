@@ -1,0 +1,15 @@
+What this project has vs. what’s missing
+Has
+RAG alpha (FinSeer + StockLLM), FAISS index (Haystack scaffold), typed schemas.
+Indicator alphas (pandas‑ta).
+Portfolio optimizer (PyPortfolioOpt) and basic sizing/OMS + simple risk check.
+Vectorbt backtesting.
+FastAPI with routes; Alpaca trading (paper flag); Supabase for portfolios and embeddings metadata.
+Missing (key gaps)
+Alpha aggregation: no IC/IR weighting, no signal standardization/decay, no multi‑alpha blender.
+Risk model: no factor model, no systematic exposure controls, no borrow/shortability integration.
+Optimizer: no explicit cost/impact/turnover penalties, no sector caps, no rebalancing schedule control.
+Execution: no execution algos/SOR, no slippage/impact model, no order/fill state machine, limited OMS checks.
+Data: no point‑in‑time guards, corporate action handling, or robust live data ingestion pipeline.
+Monitoring/compliance: no PnL/risk dashboards, alerts, kill switches, TCA, audit trails.
+Infra: no event bus, no background schedulers, limited tests, no secrets manager; FAISS/pgvector integration not finished.

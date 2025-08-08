@@ -43,7 +43,6 @@ def rsi_reversion(
         
         # Calculate RSI using float64 values
         close_prices = symbol_data['close'].values
-        print(close_prices)
         rsi_values = ta.rsi(pd.Series(close_prices), length=int(rsi_period)).to_numpy()
         rsi_values = np.nan_to_num(rsi_values)
         # Generate raw signals (-1 for overbought, 1 for oversold)
