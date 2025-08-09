@@ -21,6 +21,7 @@ def stockllm_alpha(
     filter_symbols: Optional[Iterable[str]] = None,
     confidence_threshold: float = 0.0,
     show_progress: bool = True,
+    batch_size: int = 4,
 ) -> pd.DataFrame:
     """Generate signals using StockLLM with FinSeer retrieval.
 
@@ -50,32 +51,64 @@ def stockllm_alpha(
 
     pbar = tqdm(total=total_iters, desc="Generating StockLLM signals", leave=True) if show_progress else None
 
+    # Batch over prompts to improve GPU utilization
     for sym in symbols:
         sdf = df.loc[sym].sort_index()
         dates = list(sdf.index)
-        # Start once we have at least `lookback` prior bars strictly before `as_of`
+        # Collect prompts for this symbol in chunks
+        q_list: list[str] = []
+        cand_list: list[list[str]] = []
+        locs: list[pd.Timestamp] = []
         for i in range(lookback, len(dates)):
             as_of = dates[i]
             qb = QueryBasic.from_dataframe(sym, df, as_of=as_of.date(), lookback=lookback, timeframe=timeframe)
             hits = index.query(qb, top_k=top_k, filter_symbols=filter_symbols)
             payloads = [h["payload"] for h in hits]
-            result = generator.predict(qb.to_paper_json(), payloads)
-            movement = str(result.get("movement", "freeze"))
-            probs = result.get("probabilities", {})
-            pr = float(probs.get("rise", 0.0))
-            pf = float(probs.get("fall", 0.0))
-            pz = float(probs.get("freeze", 0.0))
-            conf = float(max(pr, pf, pz))
-            signal = 0.0
-            if conf >= confidence_threshold:
-                signal = 1.0 if movement == "rise" else (-1.0 if movement == "fall" else 0.0)
-            df.loc[(sym, as_of), [
-                "movement", "prob_rise", "prob_fall", "prob_freeze", "confidence", "signal"
-            ]] = [movement, pr, pf, pz, conf, signal]
+            q_list.append(qb.to_paper_json())
+            cand_list.append(payloads)
+            locs.append(as_of)
 
-            if pbar is not None:
-                pbar.update(1)
-                pbar.set_postfix({"symbol": sym, "as_of": str(as_of)})
+            # Flush batch
+            if len(q_list) >= batch_size:
+                results = generator.predict_many(q_list, cand_list)
+                for as_of_i, res in zip(locs, results):
+                    movement = str(res.get("movement", "freeze"))
+                    probs = res.get("probabilities", {})
+                    pr = float(probs.get("rise", 0.0))
+                    pf = float(probs.get("fall", 0.0))
+                    pz = float(probs.get("freeze", 0.0))
+                    conf = float(max(pr, pf, pz))
+                    signal = 0.0
+                    if conf >= confidence_threshold:
+                        signal = 1.0 if movement == "rise" else (-1.0 if movement == "fall" else 0.0)
+                    df.loc[(sym, as_of_i), [
+                        "movement", "prob_rise", "prob_fall", "prob_freeze", "confidence", "signal"
+                    ]] = [movement, pr, pf, pz, conf, signal]
+                    if pbar is not None:
+                        pbar.update(1)
+                        pbar.set_postfix({"symbol": sym, "as_of": str(as_of_i)})
+
+                q_list.clear(); cand_list.clear(); locs.clear()
+
+        # Flush tail
+        if q_list:
+            results = generator.predict_many(q_list, cand_list)
+            for as_of_i, res in zip(locs, results):
+                movement = str(res.get("movement", "freeze"))
+                probs = res.get("probabilities", {})
+                pr = float(probs.get("rise", 0.0))
+                pf = float(probs.get("fall", 0.0))
+                pz = float(probs.get("freeze", 0.0))
+                conf = float(max(pr, pf, pz))
+                signal = 0.0
+                if conf >= confidence_threshold:
+                    signal = 1.0 if movement == "rise" else (-1.0 if movement == "fall" else 0.0)
+                df.loc[(sym, as_of_i), [
+                    "movement", "prob_rise", "prob_fall", "prob_freeze", "confidence", "signal"
+                ]] = [movement, pr, pf, pz, conf, signal]
+                if pbar is not None:
+                    pbar.update(1)
+                    pbar.set_postfix({"symbol": sym, "as_of": str(as_of_i)})
 
     # Ensure correct dtypes
     df["signal"] = df["signal"].fillna(0.0).astype(float)

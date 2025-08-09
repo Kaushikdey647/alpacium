@@ -17,13 +17,14 @@ except Exception:  # pragma: no cover
 @dataclass
 class StockLLMConfig:
     model_id: str = "TheFinAI/StockLLM"
-    max_new_tokens: int = 64
+    max_new_tokens: int = 32
     temperature: float = 0.0
     top_p: float = 1.0
     device: Optional[str] = None
     trust_remote_code: bool = True
     load_in_8bit: bool = False
     load_in_4bit: bool = False
+    batch_size: int = 4
 
 
 def _resolve_device(preferred: Optional[str] = None) -> str:
@@ -44,6 +45,11 @@ class StockLLMGenerator:
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.config.model_id, trust_remote_code=self.config.trust_remote_code
         )
+        # Prefer left padding for causal LM batching efficiency
+        try:
+            self.tokenizer.padding_side = "left"
+        except Exception:
+            pass
         model_kwargs: Dict[str, Any] = {"trust_remote_code": self.config.trust_remote_code}
         if self.config.load_in_4bit:
             model_kwargs.update({"load_in_4bit": True})
@@ -55,6 +61,9 @@ class StockLLMGenerator:
             device_map="auto" if self.device in ("cuda", "mps") else None,
             **model_kwargs,
         )
+        # Ensure pad token id is set
+        if getattr(self.model.config, "pad_token_id", None) is None:
+            self.model.config.pad_token_id = self.tokenizer.eos_token_id
         if self.device == "cpu":
             self.model = self.model.to("cpu")
         self.model.eval()
@@ -89,15 +98,25 @@ class StockLLMGenerator:
         gen = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True)
         return gen.strip()
 
-    def predict(self, query_json: str, candidates_json: Iterable[str]) -> Dict[str, Any]:
-        """Generate JSON prediction from query and retrieved candidates.
+    def generate_raw_batch(self, prompts: List[str]) -> List[str]:
+        if len(prompts) == 0:
+            return []
+        inputs = self.tokenizer(prompts, return_tensors="pt", padding=True, truncation=False).to(self.model.device)
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=self.config.max_new_tokens,
+                do_sample=self.config.temperature > 0.0,
+                temperature=self.config.temperature,
+                top_p=self.config.top_p,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
+        # Slice out the newly generated portion for each sequence
+        start = inputs["input_ids"].shape[-1]
+        decoded = self.tokenizer.batch_decode(outputs[:, start:], skip_special_tokens=True)
+        return [d.strip() for d in decoded]
 
-        Returns a dict with keys: movement (str) and probabilities (dict).
-        If parsing fails, returns a neutral fallback: freeze with probs {0,0,1}.
-        """
-        prompt = self._build_prompt(query_json, candidates_json)
-        raw = self.generate_raw(prompt)
-
+    def _parse_json_response(self, raw: str) -> Dict[str, Any]:
         def _fallback() -> Dict[str, Any]:
             return {"movement": "freeze", "probabilities": {"rise": 0.0, "fall": 0.0, "freeze": 1.0}}
 
@@ -132,5 +151,20 @@ class StockLLMGenerator:
             pass
 
         return _fallback()
+
+    def predict(self, query_json: str, candidates_json: Iterable[str]) -> Dict[str, Any]:
+        """Generate JSON prediction from query and retrieved candidates.
+
+        Returns a dict with keys: movement (str) and probabilities (dict).
+        If parsing fails, returns a neutral fallback: freeze with probs {0,0,1}.
+        """
+        prompt = self._build_prompt(query_json, candidates_json)
+        raw = self.generate_raw(prompt)
+        return self._parse_json_response(raw)
+
+    def predict_many(self, query_json_list: List[str], candidates_json_list: List[List[str]]) -> List[Dict[str, Any]]:
+        prompts = [self._build_prompt(q, c) for q, c in zip(query_json_list, candidates_json_list)]
+        outputs = self.generate_raw_batch(prompts)
+        return [self._parse_json_response(o) for o in outputs]
 
 

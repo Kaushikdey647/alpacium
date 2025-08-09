@@ -8,6 +8,7 @@ sentencepiece
 tqdm
 sentence-transformers
 accelerate
+bitsandbytes
 
 ## Retrieval / indexing (GPU)
 # Use CuPy for GPU-accelerated inner-product search in `CuVSLikeCandidateIndex`
