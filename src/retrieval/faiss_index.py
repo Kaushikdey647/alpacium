@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import atexit
 from dataclasses import dataclass, asdict
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+import logging
 
 import numpy as np
 import pandas as pd
@@ -13,8 +15,13 @@ import pandas as pd
 try:
     import faiss  # type: ignore
     _FAISS_AVAILABLE = True
+    try:
+        _FAISS_NUM_GPUS = faiss.get_num_gpus() if hasattr(faiss, "get_num_gpus") else 0
+    except Exception:
+        _FAISS_NUM_GPUS = 0
 except Exception:  # pragma: no cover
     _FAISS_AVAILABLE = False
+    _FAISS_NUM_GPUS = 0
 
 from src.schemas.timeseries import (
     Candidate,
@@ -25,6 +32,13 @@ from src.schemas.timeseries import (
 )
 from src.retrieval.finseer_client import FinSeerEmbedder
 
+
+try:
+    # tqdm.auto selects the best frontend (notebook/terminal)
+    from tqdm.auto import tqdm  # type: ignore
+except Exception:  # pragma: no cover
+    def tqdm(x, *args, **kwargs):  # type: ignore
+        return x
 
 def _to_date(x) -> date:
     if isinstance(x, datetime):
@@ -39,7 +53,8 @@ def _hash_id(*parts: str) -> int:
 
 def default_indicator_builder(symbol_df: pd.DataFrame) -> Dict[str, pd.Series]:
     out: Dict[str, pd.Series] = {}
-    for col in ("high", "low", "close", "adjusted_close", "volume"):
+    # Include full OHLCV per paper alignment
+    for col in ("open", "high", "low", "close", "adjusted_close", "volume"):
         if col in symbol_df.columns:
             out[col] = symbol_df[col].astype(float)
     try:
@@ -48,7 +63,7 @@ def default_indicator_builder(symbol_df: pd.DataFrame) -> Dict[str, pd.Series]:
         close = symbol_df["close"].astype(float).to_numpy()
         rsi = talib.RSI(close, timeperiod=14)
         macd, macd_signal, macd_hist = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
-        out["RSI"] = pd.Series(rsi, index=symbol_df.index).fillna(method="ffill").fillna(50)
+        out["RSI"] = pd.Series(rsi, index=symbol_df.index).ffill().fillna(50)
         out["MACD_hist"] = pd.Series(macd_hist, index=symbol_df.index).fillna(0)
     except Exception:
         diff = symbol_df["close"].astype(float).diff().fillna(0)
@@ -91,20 +106,59 @@ class _NumpyIndex:
 
 
 class FaissCandidateIndex:
-    def __init__(self, embedder: FinSeerEmbedder, normalize: bool = True) -> None:
+    def __init__(
+        self,
+        embedder: FinSeerEmbedder,
+        normalize: bool = True,
+        use_gpu: bool = True,
+        persist_dir: Optional[str] = None,
+        auto_persist: bool = True,
+    ) -> None:
         self.embedder = embedder
         self.normalize = normalize
+        self.use_gpu = use_gpu
         self._dim: Optional[int] = None
         self._index = None  # type: ignore
         self.id_to_meta: Dict[int, VectorMeta] = {}
         self.symbol_to_ids: Dict[str, set[int]] = {}
         self.symbol_last_date: Dict[str, str] = {}
+        self._logger = logging.getLogger(__name__)
+        self.persist_dir = persist_dir
+        self.auto_persist = auto_persist
+
+        # Auto-load persisted index if configured
+        if self.persist_dir:
+            try:
+                os.makedirs(self.persist_dir, exist_ok=True)
+                # Only attempt load if files exist
+                if os.path.exists(os.path.join(self.persist_dir, "id_to_meta.json")):
+                    self.load(self.persist_dir)
+                    self._logger.info(
+                        "Loaded index from %s (ids=%d symbols=%d)",
+                        self.persist_dir,
+                        len(self.id_to_meta),
+                        len(self.symbol_to_ids),
+                    )
+            except Exception as e:
+                self._logger.warning("Failed to load index from %s: %s", self.persist_dir, e)
+            if self.auto_persist:
+                atexit.register(self._save_on_exit)
 
     def _ensure_index(self, dim: int) -> None:
         if self._index is not None:
             return
         self._dim = dim
         if _FAISS_AVAILABLE:
+            # Prefer GPU if available and requested
+            if self.use_gpu and _FAISS_NUM_GPUS > 0 and hasattr(faiss, "StandardGpuResources"):
+                try:
+                    res = faiss.StandardGpuResources()
+                    base = faiss.GpuIndexFlatIP(res, dim)
+                    self._index = faiss.IndexIDMap2(base)
+                    self._logger.info("Using FAISS GPU (FlatIP) on %d GPU(s)", _FAISS_NUM_GPUS)
+                    return
+                except Exception as e:
+                    self._logger.warning("Falling back to CPU FAISS (GPU init failed: %s)", e)
             base = faiss.IndexFlatIP(dim)
             self._index = faiss.IndexIDMap2(base)
         else:
@@ -112,6 +166,14 @@ class FaissCandidateIndex:
 
     def _add_vectors(self, vectors: np.ndarray, ids: np.ndarray) -> None:
         self._index.add_with_ids(vectors, ids)
+
+    def _save_on_exit(self) -> None:
+        try:
+            if self.persist_dir:
+                self.save(self.persist_dir)
+                self._logger.info("Saved index on exit to %s", self.persist_dir)
+        except Exception as e:
+            self._logger.warning("Failed to save index on exit: %s", e)
 
     def _generate_candidates_for_symbol(
         self,
@@ -126,6 +188,10 @@ class FaissCandidateIndex:
         if isinstance(df.index, pd.MultiIndex) and df.index.nlevels == 2:
             df = df.loc[symbol]
         indicators = indicator_builder(df)
+        self._logger.info(
+            "Building candidates: symbol=%s rows=%d indicators=%s lookback=%d",
+            symbol, len(df), list(indicators.keys()), lookback,
+        )
         dates = list(df.index)
         candidates: List[Candidate] = []
         for i in range(lookback - 1, len(dates)):
@@ -136,7 +202,11 @@ class FaissCandidateIndex:
             window_idx = dates[i - (lookback - 1) : i + 1]
             recent_dates = [_to_date(d) for d in window_idx]
             for name, series in indicators.items():
-                values = list(series.loc[window_idx].astype(float).values)
+                seg = series.loc[window_idx].astype(float)
+                # Ensure 1D values for IndicatorSeries, per paper JSON schema (5 numbers)
+                if isinstance(seg, pd.DataFrame):
+                    seg = seg.iloc[:, 0]
+                values = [float(x) for x in seg.tolist()]
                 candidates.append(
                     Candidate(
                         candidate_stock=symbol,
@@ -147,24 +217,24 @@ class FaissCandidateIndex:
                         indicator=IndicatorSeries(name=name, values=values),
                     )
                 )
+        self._logger.info("Built %d candidates for symbol=%s", len(candidates), symbol)
         return candidates
 
-    def add_candidates(self, cands: Sequence[Candidate]) -> int:
+    def add_candidates(self, cands: Sequence[Candidate], show_progress: bool = True) -> int:
         if not cands:
             return 0
+
         texts = [c.to_paper_json() for c in cands]
-        vecs = self.embedder.encode(texts)
-        if self.normalize:
-            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-            norms[norms == 0] = 1.0
-            vecs = vecs / norms
-        self._ensure_index(vecs.shape[1])
-        ids: List[int] = []
-        metas: List[VectorMeta] = []
+        # Derive batch size from embedder if available
+        bs = getattr(getattr(self.embedder, "config", None), "batch_size", 32)
+
+        # Prepare ids/metas aligned with texts so we can slice per-batch
+        ids_all: List[int] = []
+        metas_all: List[VectorMeta] = []
         for c, j in zip(cands, texts):
             vid = _hash_id(c.candidate_stock, c.candidate_date.isoformat(), c.indicator.name)
-            ids.append(vid)
-            metas.append(
+            ids_all.append(vid)
+            metas_all.append(
                 VectorMeta(
                     symbol=c.candidate_stock,
                     candidate_date=c.candidate_date.isoformat(),
@@ -172,15 +242,53 @@ class FaissCandidateIndex:
                     payload=j,
                 )
             )
-        ids_arr = np.array(ids, dtype=np.int64)
-        self._add_vectors(vecs.astype(np.float32), ids_arr)
-        for vid, m in zip(ids, metas):
-            self.id_to_meta[vid] = m
-            self.symbol_to_ids.setdefault(m.symbol, set()).add(vid)
-            self.symbol_last_date[m.symbol] = max(
-                m.candidate_date, self.symbol_last_date.get(m.symbol, "1900-01-01")
-            )
-        return len(cands)
+
+        total_added = 0
+        rng = range(0, len(texts), bs)
+        total_batches = len(texts) // bs + (1 if len(texts) % bs else 0)
+        iterator = (
+            tqdm(rng, desc="Embedding batches", total=total_batches)
+            if show_progress
+            else rng
+        )
+
+        # Avoid double-normalization when embedder already normalizes
+        embedder_normalizes = bool(getattr(getattr(self.embedder, "config", None), "normalize", False))
+
+        for start in iterator:
+            end = min(start + bs, len(texts))
+            chunk_texts = texts[start:end]
+            vecs = self.embedder.encode(chunk_texts)
+
+            if self.normalize and not embedder_normalizes:
+                norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+                norms[norms == 0] = 1.0
+                vecs = vecs / norms
+
+            if self._index is None:
+                self._ensure_index(vecs.shape[1])
+
+            ids_arr = np.array(ids_all[start:end], dtype=np.int64)
+            self._add_vectors(vecs.astype(np.float32), ids_arr)
+
+            # Update metadata per-batch
+            for vid, m in zip(ids_all[start:end], metas_all[start:end]):
+                self.id_to_meta[vid] = m
+                self.symbol_to_ids.setdefault(m.symbol, set()).add(vid)
+                self.symbol_last_date[m.symbol] = max(
+                    m.candidate_date, self.symbol_last_date.get(m.symbol, "1900-01-01")
+                )
+            total_added += (end - start)
+
+        self._logger.info("Indexed %d vectors (dim=%s)", total_added, self._dim)
+        # Optional auto-persist after batch additions
+        if self.persist_dir and self.auto_persist:
+            try:
+                self.save(self.persist_dir)
+                self._logger.info("Auto-saved index to %s", self.persist_dir)
+            except Exception as e:
+                self._logger.warning("Auto-save failed: %s", e)
+        return total_added
 
     def build_from_symbol_dfs(
         self,
@@ -188,11 +296,18 @@ class FaissCandidateIndex:
         lookback: int = 5,
         indicator_builder=default_indicator_builder,
         timeframe: TimeFrame = TimeFrame.day,
+        show_progress: bool = True,
     ) -> int:
+        """Build index from per-symbol DataFrames.
+
+        If show_progress is True, display a tqdm progress bar over symbols.
+        """
         total = 0
-        for sym, df in symbol_to_df.items():
+        items = list(symbol_to_df.items())
+        iterator = tqdm(items, desc="Indexing symbols", total=len(items)) if show_progress else items
+        for sym, df in iterator:
             cands = self._generate_candidates_for_symbol(sym, df, lookback, indicator_builder, timeframe)
-            total += self.add_candidates(cands)
+            total += self.add_candidates(cands, show_progress=True)
         return total
 
     def update_symbol(
@@ -215,7 +330,8 @@ class FaissCandidateIndex:
         filter_symbols: Optional[Iterable[str]] = None,
     ) -> List[Dict[str, Any]]:
         q_vec = self.embedder.encode_one(query.to_paper_json()).astype(np.float32)
-        if self.normalize:
+        embedder_normalizes = bool(getattr(getattr(self.embedder, "config", None), "normalize", False))
+        if self.normalize and not embedder_normalizes:
             q_vec = q_vec / (np.linalg.norm(q_vec) + 1e-12)
         q_vec = q_vec.reshape(1, -1)
         D, I = self._index.search(q_vec, top_k)
@@ -280,5 +396,14 @@ class FaissCandidateIndex:
                 ids = np.array(json.load(f), dtype=np.int64)
             self._index = _NumpyIndex(V.shape[1])
             self._index.add_with_ids(V, ids)
+
+    # --- Maintenance ------------------------------------------------------------
+    def clear(self) -> None:
+        """Clear all vectors and metadata from the index."""
+        self._index = None
+        self._dim = None
+        self.id_to_meta.clear()
+        self.symbol_to_ids.clear()
+        self.symbol_last_date.clear()
 
 

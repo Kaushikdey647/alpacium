@@ -25,8 +25,8 @@
 - LLM client (`src/llm/`)
   - `stockllm_client.py`: `StockLLMConfig`, `StockLLMGenerator`
 - Retrieval (`src/retrieval/`)
-  - `finseer_client.py`: `FinSeerConfig`, `FinSeerEmbedder`
-  - `faiss_index.py`: `FaissCandidateIndex`, `default_indicator_builder`, `save/load`
+  - `finseer_client.py`: `FinSeerConfig`, `FinSeerEmbedder` (HF `AutoModel`) and `FinSeerEmbedderST` (SentenceTransformers)
+  - `faiss_index.py`: `FaissCandidateIndex` with streaming, per-batch embedding and incremental FAISS updates; `default_indicator_builder`; persistence (`save/load`) and maintenance (`clear`)
 - Orchestration (`src/orchestration/`)
   - `langgraph_pipeline.py`: `build_retrieval_graph`
 - Service re-exports (`src/services/__init__.py`) for convenience
@@ -58,7 +58,7 @@
 ### Data flow (typical)
 1. Ingest OHLCV bars via API or local DataFrames.
 2. Build candidates (5-day windows) per symbol/indicator, serialize to paper JSON.
-3. Embed candidates with FinSeer and index in FAISS (with metadata and symbol tracking).
+3. Embed candidates with FinSeer and index in FAISS. Embedding and insertion are performed in batches with a live progress bar; metadata and per-symbol last indexed date are tracked for efficient updates.
 4. At query time:
    - Build `QueryBasic` (5-day adjusted-close) JSON.
    - Retrieve top-k candidates via FAISS (cosine/IP over normalized vectors).
@@ -76,7 +76,8 @@
 
 ### Notes & extensions
 - The FAISS index stores exact candidate JSON payloads to ensure prompt fidelity and fast retrieval.
-- Incremental updates add new windows per symbol without re-indexing historical vectors.
+- Incremental updates add new windows per symbol without re-indexing historical vectors. Indexing streams embeddings in batches to avoid large memory spikes and to expose progress.
+- Embedding normalization is performed once (either by the embedder or the index) to maintain cosine/IP equivalence and avoid redundant work.
 - To harden `/predict`, extend the request to include the explicit 5-day OHLCV query window and validate via `QueryBasic`.
 - Orders endpoint is a stub; integrate `alpaca-trade-api` and add auth, order status, and position endpoints.
 

@@ -87,6 +87,19 @@ bars.df
 # access bars as list - important to note that you must access by symbol key
 # even for a single symbol request - models are agnostic to number of symbols
 bars["BTC/USD"]
+
+Timezone policy
+The system normalizes timestamps at ingestion to avoid tz-naive vs tz-aware slicing errors in pandas:
+
+- Daily/weekly/monthly bars: timestamps are converted to UTC and stored tz-naive (no tz offset).
+- Intraday bars (minute/hour): timestamps are converted to UTC and kept tz-aware.
+
+Implications:
+- You can slice daily/weekly/monthly DataFrames with tz-naive Python datetimes: `slice(datetime(2020,1,1), datetime(2023,12,31))`.
+- For intraday DataFrames, use tz-aware UTC bounds, e.g. `pd.Timestamp('2024-01-02 13:00', tz='UTC')`.
+- MultiIndex with levels (`symbol`, `timestamp`) is always sorted; slicing relies on matching tz policy.
+
+If bringing your own data via JSON, timestamps are first coerced to UTC tz-aware; for daily data they may be made tz-naive downstream per policy.
 Real Time Data
 Clients
 The data stream clients lets you subscribe to real-time data via WebSockets. There are clients for crypto data, stock data and option data. These clients are different from the historical ones. They do not have methods which return data immediately. Instead, the methods in these clients allow you to assign methods to receive real-time data.

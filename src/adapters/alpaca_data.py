@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from datetime import datetime
 from typing import Dict, Iterable, List, Optional
 
@@ -69,6 +70,11 @@ class AlpacaMarketData:
 
         The DataFrames have MultiIndex (symbol, timestamp) and numeric columns.
         """
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "Fetching bars: symbols=%s timeframe=%s start=%s end=%s limit=%s adjustment=%s",
+            list(symbols), timeframe, start, end, limit, adjustment,
+        )
         req = StockBarsRequest(
             symbol_or_symbols=list(symbols),
             timeframe=_to_alpaca_timeframe(timeframe),
@@ -89,7 +95,49 @@ class AlpacaMarketData:
                 bars_df = bars_df.set_index(["symbol", "timestamp"]).sort_index()
             else:
                 raise RuntimeError("Bars DataFrame missing MultiIndex or symbol/timestamp columns")
-        bars_df = bars_df.rename(columns={"trade_count": "volume"})
+        # Normalize column names and avoid duplicates:
+        # - If SDK returns both 'volume' and 'trade_count', keep 'volume' and rename 'trade_count' → 'num_trades'
+        # - If only 'trade_count' exists, promote it to 'volume'
+        cols = list(bars_df.columns)
+        if "trade_count" in cols and "volume" in cols:
+            bars_df = bars_df.rename(columns={"trade_count": "num_trades"})
+        elif "trade_count" in cols and "volume" not in cols:
+            bars_df = bars_df.rename(columns={"trade_count": "volume"})
+        # Drop any duplicate-named columns (keep first occurrence)
+        if hasattr(bars_df.columns, "duplicated") and bars_df.columns.duplicated().any():
+            bars_df = bars_df.loc[:, ~bars_df.columns.duplicated(keep="first")]
+        # Normalize timezone handling on the timestamp level for durability.
+        # Policy:
+        # - For daily/weekly/monthly bars: timestamps are converted to UTC and stored tz-naive
+        # - For intraday bars (minute/hour): timestamps are converted to UTC and kept tz-aware
+        try:
+            ts_level_pos = bars_df.index.names.index("timestamp")
+            ts_idx = bars_df.index.levels[ts_level_pos]
+            if isinstance(ts_idx, pd.DatetimeIndex):
+                is_intraday = timeframe in (
+                    TimeFrame.minute,
+                    TimeFrame.five_minutes,
+                    TimeFrame.fifteen_minutes,
+                    TimeFrame.hour,
+                )
+                if is_intraday:
+                    new_ts = ts_idx.tz_localize("UTC") if ts_idx.tz is None else ts_idx.tz_convert("UTC")
+                else:
+                    # Day/Week/Month → UTC then drop tz
+                    if ts_idx.tz is None:
+                        new_ts = ts_idx
+                    else:
+                        new_ts = ts_idx.tz_convert("UTC").tz_localize(None)
+                bars_df.index = bars_df.index.set_levels(new_ts, level=ts_level_pos)
+                logger.info(
+                    "Timezone normalized for bars: intraday=%s tz=%s tz_naive=%s",
+                    is_intraday,
+                    getattr(new_ts, "tz", None),
+                    getattr(new_ts, "tz", None) is None,
+                )
+        except Exception:
+            # If anything unexpected about the index, proceed without normalization
+            logger.warning("Failed to normalize timezone for bars index; proceeding as-is")
         # Ensure required columns exist
         for col in ["open", "high", "low", "close", "volume"]:
             if col not in bars_df.columns:
@@ -101,6 +149,7 @@ class AlpacaMarketData:
             df_sym = bars_df.loc[sym][["open", "high", "low", "close", "adjusted_close", "volume"]].astype(float)
             df_sym.index.name = "timestamp"
             out[str(sym)] = df_sym
+            logger.info("Prepared symbol=%s rows=%d cols=%d", sym, len(df_sym), len(df_sym.columns))
         return out
 
 

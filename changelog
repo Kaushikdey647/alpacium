@@ -1,5 +1,18 @@
 ### Changelog
 
+#### [Unreleased]
+
+- Retrieval/indexing improvements
+  - `src/retrieval/faiss_index.py`
+    - Added streaming, per-batch embedding with incremental FAISS insertion. Shows a live "Embedding batches" progress bar.
+    - Avoids double-normalization when the embedder already returns normalized vectors.
+    - `build_from_symbol_dfs` now surfaces per-batch progress by forwarding `show_progress=True` to `add_candidates`.
+    - Added `clear()` to reset vectors and metadata.
+  - `src/retrieval/finseer_client.py`
+    - Introduced `FinSeerEmbedderST` and `FinSeerSTConfig` using `SentenceTransformer('ElsaShaw/FinSeer')` for closer parity with the reference and potential speedups.
+  - `requirements.txt`
+    - Added `sentence-transformers` dependency.
+
 - Added Hugging Face wrappers
   - Created `src/services/finseer.py`:
     - `FinSeerConfig`, `FinSeerEmbedder` with batched `encode`, `encode_one`.

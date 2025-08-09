@@ -104,3 +104,41 @@ class FinSeerEmbedder:
         return self.encode([self.to_text_candidate(c) for c in candidates])
 
 
+
+# Optional SentenceTransformer-based embedder for speed/parity with reference
+@dataclass
+class FinSeerSTConfig:
+    model_id: str = "TheFinAI/FinSeer"
+    normalize: bool = True
+    batch_size: int = 32
+    device: Optional[str] = None
+
+
+class FinSeerEmbedderST:
+    def __init__(self, config: Optional[FinSeerSTConfig] = None) -> None:
+        try:
+            from sentence_transformers import SentenceTransformer  # type: ignore
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError(
+                "sentence-transformers is required for FinSeerEmbedderST. Please install it."
+            ) from exc
+
+        self.config = config or FinSeerSTConfig()
+        self.device = _resolve_device(self.config.device)
+        self.model = SentenceTransformer(self.config.model_id, device=self.device)
+
+    def encode(self, texts: Iterable[str]) -> np.ndarray:
+        texts_list: List[str] = list(texts)
+        if not texts_list:
+            return np.zeros((0, 0), dtype=np.float32)
+        # normalize_embeddings aligns with cosine/IP usage
+        embs = self.model.encode(
+            texts_list,
+            batch_size=self.config.batch_size,
+            normalize_embeddings=self.config.normalize,
+            convert_to_numpy=True,
+        )
+        return embs.astype(np.float32)
+
+    def encode_one(self, text: str) -> np.ndarray:
+        return self.encode([text])[0]

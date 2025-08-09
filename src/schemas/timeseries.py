@@ -6,7 +6,8 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
-from pydantic import BaseModel, Field, root_validator, validator
+from pydantic import BaseModel, Field
+from pydantic import field_validator, model_validator
 
 
 # --- Timeframe -----------------------------------------------------------------
@@ -107,7 +108,7 @@ class IndicatorSeries(BaseModel):
     name: str = Field(..., description="Indicator name (OHLCV or TA-Lib function)")
     values: List[float] = Field(..., min_items=1)
 
-    @validator("name")
+    @field_validator("name")
     def validate_name(cls, v: str) -> str:
         normalized = v.strip()
         valid = set(BASIC_INDICATORS) | set(TA_LIB_FUNCTIONS) | {
@@ -137,9 +138,9 @@ class OHLCVWindow(BaseModel):
     adjusted_close_list: Optional[List[float]] = None
     volume_list: Optional[List[float]] = None
 
-    @root_validator
-    def validate_lengths(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        dates = values.get("recent_dates") or []
+    @model_validator(mode="after")
+    def validate_lengths(self) -> "OHLCVWindow":
+        dates = self.recent_dates or []
         n = len(dates)
         for key in (
             "open_list",
@@ -149,10 +150,10 @@ class OHLCVWindow(BaseModel):
             "adjusted_close_list",
             "volume_list",
         ):
-            series = values.get(key)
+            series = getattr(self, key)
             if series is not None and len(series) != n:
                 raise ValueError(f"{key} length {len(series)} must match dates length {n}")
-        return values
+        return self
 
     def ensure_adjusted_close_only(self) -> Dict[str, Any]:
         if self.adjusted_close_list is None:
@@ -217,18 +218,16 @@ class QueryBasic(BaseModel):
 class QueryTechnical(QueryBasic):
     indicators: Dict[str, List[float]] = Field(default_factory=dict)
 
-    @validator("indicators")
-    def validate_indicators(
-        cls, v: Dict[str, List[float]], values: Dict[str, Any]
-    ) -> Dict[str, List[float]]:
-        dates = values.get("window").recent_dates if values.get("window") else []
-        for name, series in v.items():
-            IndicatorSeries(name=name, values=series)  # validate name
+    @model_validator(mode="after")
+    def validate_indicators(self) -> "QueryTechnical":
+        dates = self.window.recent_dates if getattr(self, "window", None) else []
+        for name, series in self.indicators.items():
+            IndicatorSeries(name=name, values=series)
             if len(series) != len(dates):
                 raise ValueError(
                     f"Indicator '{name}' length {len(series)} must match dates length {len(dates)}"
                 )
-        return v
+        return self
 
     def to_rag_blocks(self) -> List[str]:
         blocks: List[str] = []
@@ -256,14 +255,14 @@ class Candidate(BaseModel):
     recent_dates: List[date] = Field(..., min_items=1)
     indicator: IndicatorSeries
 
-    @validator("indicator")
-    def align_indicator_length(cls, v: IndicatorSeries, values: Dict[str, Any]) -> IndicatorSeries:
-        dates = values.get("recent_dates") or []
-        if len(v.values) != len(dates):
+    @model_validator(mode="after")
+    def align_indicator_length(self) -> "Candidate":
+        dates = self.recent_dates or []
+        if len(self.indicator.values) != len(dates):
             raise ValueError(
-                f"Indicator length {len(v.values)} must match dates length {len(dates)}"
+                f"Indicator length {len(self.indicator.values)} must match dates length {len(dates)}"
             )
-        return v
+        return self
 
     def to_paper_json(self) -> str:
         key = f"{self.indicator.name}_list" if self.indicator.name not in BASIC_INDICATORS else f"{self.indicator.name}_list"

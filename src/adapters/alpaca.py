@@ -20,6 +20,18 @@ def symbols_bars_to_df_map(symbols: Iterable[Dict[str, Any]]) -> Dict[str, pd.Da
         for b in bars:
             ts = b["timestamp"]
             ts_dt = pd.to_datetime(ts) if not isinstance(ts, pd.Timestamp) else ts
+            # Normalize to UTC tz-aware for generality when ingesting from JSON-like inputs.
+            # Downstream code (e.g., AlpacaMarketData) may further drop tz for daily bars.
+            if getattr(ts_dt, "tzinfo", None) is None:
+                try:
+                    ts_dt = ts_dt.tz_localize("UTC")
+                except Exception:
+                    pass
+            else:
+                try:
+                    ts_dt = ts_dt.tz_convert("UTC")
+                except Exception:
+                    pass
             idx.append((sym, ts_dt))
             rows.append(
                 {
