@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+import talib
 
 
 def rsi_reversion(
@@ -42,9 +42,8 @@ def rsi_reversion(
         symbol_data = symbol_data.sort_index()
         
         # Calculate RSI using float64 values
-        close_prices = symbol_data['close'].values
-        rsi_values = ta.rsi(pd.Series(close_prices), length=int(rsi_period)).to_numpy()
-        rsi_values = np.nan_to_num(rsi_values)
+        close_prices = symbol_data['close'].to_numpy(dtype=np.float64)
+        rsi_values = talib.RSI(close_prices, timeperiod=int(rsi_period))
         # Generate raw signals (-1 for overbought, 1 for oversold)
         raw_signal = np.zeros_like(close_prices, dtype=np.float64)
         mask = ~np.isnan(rsi_values)
@@ -52,7 +51,7 @@ def rsi_reversion(
         raw_signal[mask & (rsi_values < oversold)] = 1.0     # Long
         
         # Store RSI and raw signals
-        df.loc[symbol, 'rsi'] = rsi_values
+        df.loc[symbol, 'rsi'] = np.nan_to_num(rsi_values)
         df.loc[symbol, 'raw_signal'] = raw_signal
         
         # Apply smoothing

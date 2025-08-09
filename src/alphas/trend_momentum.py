@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+import talib
 
 def trend_momentum(
         historical_data: pd.DataFrame,
@@ -60,15 +60,16 @@ def trend_momentum(
         close_prices = symbol_data['close'].to_numpy(dtype=np.float64)
         
         try:
-            # Calculate indicators (pandas-ta)
-            s = pd.Series(close_prices)
-            fast = ta.ema(s, length=int(fast_ma)).to_numpy()
-            slow = ta.ema(s, length=int(slow_ma)).to_numpy()
-            rsi = ta.rsi(s, length=int(rsi_period)).to_numpy()
-            macd_df = ta.macd(s, fast=int(macd_fast), slow=int(macd_slow), signal=int(macd_signal))
-            macd_line = macd_df[macd_df.columns[0]].fillna(0).to_numpy()
-            signal_line = macd_df[macd_df.columns[1]].fillna(0).to_numpy()
-            macd_hist = macd_df[macd_df.columns[2]].fillna(0).to_numpy()
+            # Calculate indicators (TA-Lib)
+            fast = talib.EMA(close_prices, timeperiod=int(fast_ma))
+            slow = talib.EMA(close_prices, timeperiod=int(slow_ma))
+            rsi = talib.RSI(close_prices, timeperiod=int(rsi_period))
+            macd_line, signal_line, macd_hist = talib.MACD(
+                close_prices,
+                fastperiod=int(macd_fast),
+                slowperiod=int(macd_slow),
+                signalperiod=int(macd_signal)
+            )
             
             # Fill NaN values with appropriate initial values
             fast_filled = pd.Series(fast).fillna(close_prices[0]).values

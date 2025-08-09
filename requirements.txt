@@ -1,5 +1,5 @@
 ## Core numerics
-pandas-ta
+ta-lib
 
 ## ML / LLM
 torch
@@ -10,7 +10,6 @@ sentence-transformers
 
 ## Retrieval / indexing
 faiss-cpu
-faiss-gpu
 
 ## Portfolio / optimization
 PyPortfolioOpt
