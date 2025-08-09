@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import Callable, Any, Optional
+from typing import Callable, Any, Optional, Dict
 from dataclasses import dataclass
 
 
@@ -7,8 +7,8 @@ from dataclasses import dataclass
 class AlphaSignals:
     """Container for alpha signals and metadata."""
     signals: pd.DataFrame  # DataFrame with signals and calculations
-    metadata: dict[str, Any]  # Additional info from alpha calculation
-    parameters: dict[str, Any]  # Parameters used to generate signals
+    metadata: Dict[str, Any]  # Additional info from alpha calculation
+    parameters: Dict[str, Any]  # Parameters used to generate signals
     
     def __str__(self) -> str:
         # Basic signal info
@@ -81,7 +81,7 @@ class AlphaEngine:
             self,
             historical_data: pd.DataFrame,
             alpha_function: Callable[..., pd.DataFrame],
-            parameters: Optional[dict[str, Any]] = None,
+            parameters: Optional[Dict[str, Any]] = None,
             show_progress: bool = True
     ) -> AlphaSignals:
         """

@@ -7,13 +7,14 @@ transformers
 sentencepiece
 tqdm
 sentence-transformers
+accelerate
 
 ## Retrieval / indexing
 faiss-cpu
 
 ## Portfolio / optimization
 PyPortfolioOpt
-vectorbt==0.26.0
+vectorbt[full]
 
 ## Web API
 pydantic

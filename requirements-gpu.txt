@@ -1,0 +1,35 @@
+## Core numerics
+ta-lib
+
+## ML / LLM
+torch
+transformers
+sentencepiece
+tqdm
+sentence-transformers
+accelerate
+
+## Retrieval / indexing (GPU)
+# Use CuPy for GPU-accelerated inner-product search in `CuVSLikeCandidateIndex`
+# Choose the CUDA variant that matches your driver. For CUDA 12.x use:
+cupy-cuda12x
+# If your environment uses CUDA 11.x, replace with:
+# cupy-cuda11x>=13.0.0
+
+## Portfolio / optimization
+PyPortfolioOpt
+vectorbt[full]
+
+## Web API
+pydantic
+fastapi
+uvicorn
+
+## Brokers & storage
+alpaca-py
+supabase
+
+# Optional: install GPU builds of PyTorch (recommended on CUDA machines)
+# pip install --index-url https://download.pytorch.org/whl/cu124 torch torchvision torchaudio
+
+

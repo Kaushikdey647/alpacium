@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+import json
+import re
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -86,5 +88,49 @@ class StockLLMGenerator:
             )
         gen = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True)
         return gen.strip()
+
+    def predict(self, query_json: str, candidates_json: Iterable[str]) -> Dict[str, Any]:
+        """Generate JSON prediction from query and retrieved candidates.
+
+        Returns a dict with keys: movement (str) and probabilities (dict).
+        If parsing fails, returns a neutral fallback: freeze with probs {0,0,1}.
+        """
+        prompt = self._build_prompt(query_json, candidates_json)
+        raw = self.generate_raw(prompt)
+
+        def _fallback() -> Dict[str, Any]:
+            return {"movement": "freeze", "probabilities": {"rise": 0.0, "fall": 0.0, "freeze": 1.0}}
+
+        # Try strict JSON first
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and "movement" in parsed and "probabilities" in parsed:
+                return parsed
+        except Exception:
+            pass
+
+        # Extract JSON object substring if model included extra text
+        try:
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                snippet = raw[start : end + 1]
+                parsed = json.loads(snippet)
+                if isinstance(parsed, dict) and "movement" in parsed and "probabilities" in parsed:
+                    return parsed
+        except Exception:
+            pass
+
+        # Last resort: regex for JSON-like block
+        try:
+            match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(0))
+                if isinstance(parsed, dict) and "movement" in parsed and "probabilities" in parsed:
+                    return parsed
+        except Exception:
+            pass
+
+        return _fallback()
 
 

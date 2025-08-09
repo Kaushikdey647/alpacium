@@ -4,6 +4,7 @@ from typing import Iterable, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 from src.schemas import QueryBasic, TimeFrame
 from src.retrieval.faiss_index import FaissCandidateIndex
@@ -19,6 +20,7 @@ def stockllm_alpha(
     timeframe: TimeFrame = TimeFrame.day,
     filter_symbols: Optional[Iterable[str]] = None,
     confidence_threshold: float = 0.0,
+    show_progress: bool = True,
 ) -> pd.DataFrame:
     """Generate signals using StockLLM with FinSeer retrieval.
 
@@ -40,10 +42,19 @@ def stockllm_alpha(
     for c in out_cols:
         df[c] = np.nan
 
+    # Pre-compute total iterations for a single progress bar across all symbols
+    total_iters = 0
+    for sym in symbols:
+        sdf_tmp = df.loc[sym].sort_index()
+        total_iters += max(0, len(sdf_tmp.index) - lookback)
+
+    pbar = tqdm(total=total_iters, desc="Generating StockLLM signals", leave=True) if show_progress else None
+
     for sym in symbols:
         sdf = df.loc[sym].sort_index()
         dates = list(sdf.index)
-        for i in range(lookback - 1, len(dates)):
+        # Start once we have at least `lookback` prior bars strictly before `as_of`
+        for i in range(lookback, len(dates)):
             as_of = dates[i]
             qb = QueryBasic.from_dataframe(sym, df, as_of=as_of.date(), lookback=lookback, timeframe=timeframe)
             hits = index.query(qb, top_k=top_k, filter_symbols=filter_symbols)
@@ -62,8 +73,14 @@ def stockllm_alpha(
                 "movement", "prob_rise", "prob_fall", "prob_freeze", "confidence", "signal"
             ]] = [movement, pr, pf, pz, conf, signal]
 
+            if pbar is not None:
+                pbar.update(1)
+                pbar.set_postfix({"symbol": sym, "as_of": str(as_of)})
+
     # Ensure correct dtypes
     df["signal"] = df["signal"].fillna(0.0).astype(float)
+    if pbar is not None:
+        pbar.close()
     return df
 
 

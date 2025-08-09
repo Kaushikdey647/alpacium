@@ -63,6 +63,19 @@
 ### FastAPI application
 
 - Added `app/`
+
+## 0.3.1
+
+- Retrieval index
+  - Added `src/retrieval/cuvs_index.py`:
+    - `CuVSLikeCandidateIndex`: FAISS-free, GPU-accelerated (CuPy GEMM) inner-product index with NumPy fallback.
+    - Mirrors `FaissCandidateIndex` interface: supports `build_from_symbol_dfs`, `update_symbol`, `add_candidates`, `query`, `save`, `load`, and maintains `id_to_meta`, `symbol_to_ids`, `symbol_last_date`.
+    - Persists raw vectors (`vectors.npy`) and ids (`ids.json`) compatible with CPU/GPU reload.
+  - Kept `default_indicator_builder`/paper-aligned payloads consistent across FAISS and CuPy indices.
+
+- Notebooks
+  - Enriched `backtest_stockllm_alpha.ipynb` with vectorbt analysis: stats, trades, rolling metrics, confidence-threshold sweep, per-symbol heatmaps, and an animation.
+
   - `app/schemas.py`: Pydantic I/O models for API (bars ingestion, index build/update, predict, backtest, orders).
   - `app/main.py`: FastAPI app exposing endpoints:
     - `POST /index/build` and `POST /index/update` for FAISS index management
